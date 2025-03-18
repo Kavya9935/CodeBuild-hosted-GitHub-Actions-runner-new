@@ -4,7 +4,7 @@ jobs:
   Hello-World-Job:
     runs-on:
       - codebuild-Runner-Project-${{ github.run_id }}-${{ github.run_attempt }}
-      - buildspec-override:true
+
       - image:codebuild-repo:latestt
     steps:
       - run: echo "Hello World!"
