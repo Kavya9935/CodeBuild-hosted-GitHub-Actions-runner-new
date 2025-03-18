@@ -5,6 +5,6 @@ jobs:
     runs-on:
       - codebuild-Runner-Project-${{ github.run_id }}-${{ github.run_attempt }}
       - buildspec-override:true
-      - image:654654319122.dkr.ecr.us-east-1.amazonaws.com/codebuild-repo:late
+      - image:custom-654654319122.dkr.ecr.us-east-1.amazonaws.com/codebuild-repo:latest
     steps:
       - run: echo "Hello World!"
