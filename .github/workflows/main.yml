@@ -4,7 +4,7 @@ jobs:
   Hello-World-Job:
     runs-on:
       - codebuild-Runner-Project-${{ github.run_id }}-${{ github.run_attempt }}
-      - buildspec-override:true
-      - image:custom-654654319122.dkr.ecr.us-east-1.amazonaws.com/codebui-repo:latest
+      
+      - image:custom-654654319122.dkr.ecr.us-east-1.amazonaws.com/codebuild-repo:latest
     steps:
-      - run: echo "Hello World!"
+      - run: echo "Hello I am from Github Action workflow!"
