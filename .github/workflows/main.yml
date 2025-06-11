@@ -3,7 +3,7 @@ on: [push]
 jobs:
   Hello-World-Job:
     runs-on:
-      - DefaultProject-${{ github.run_id }}-${{ github.run_attempt }}
+      - codebuild-DefaultProject-${{ github.run_id }}-${{ github.run_attempt }}
   
     steps:
       - run: echo "Hello I am from Github Action workflow!"
