@@ -7,8 +7,14 @@ jobs:
     runs-on:
       - codebuild-Demo-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
+      # Configure AWS creds via OIDC (use your role and region)
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::654654319122:role/CodeBuild-Super-Role
+          aws-region: us-east-1
 
-            # Kick off a tiny CodeBuild "metadata" build that only exists to carry env overrides
+      # Kick off a tiny CodeBuild "metadata" build that only exists to carry env overrides
       - name: Start metadata build (for Lambda/EventBridge)
         run: |
           aws codebuild start-build --project-name Demo \
@@ -19,5 +25,5 @@ jobs:
               name=GITHUB_RUN_ID,value=${{ github.run_id }},type=PLAINTEXT \
               name=GITHUB_RUN_URL,value=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }},type=PLAINTEXT
 
-            # Your original step(s)
+      # Your original step(s)
       - run: echo "Hello I am from GitHub Action workflow!"
