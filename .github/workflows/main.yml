@@ -1,9 +1,23 @@
 name: Hello World
 on: [push]
+
 jobs:
   Hello-World-Job:
+    # your CodeBuild-hosted runner label
     runs-on:
       - codebuild-Demo-${{ github.run_id }}-${{ github.run_attempt }}
-  
     steps:
-      - run: echo "Hello I am from Github Action workflow!"
+
+            # Kick off a tiny CodeBuild "metadata" build that only exists to carry env overrides
+      - name: Start metadata build (for Lambda/EventBridge)
+        run: |
+          aws codebuild start-build --project-name Demo \
+            --environment-variables-override \
+              name=GITHUB_OWNER,value=${{ github.repository_owner }},type=PLAINTEXT \
+              name=GITHUB_REPO,value=${{ github.event.repository.name }},type=PLAINTEXT \
+              name=GITHUB_REPOSITORY,value=${{ github.repository }},type=PLAINTEXT \
+              name=GITHUB_RUN_ID,value=${{ github.run_id }},type=PLAINTEXT \
+              name=GITHUB_RUN_URL,value=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }},type=PLAINTEXT
+
+            # Your original step(s)
+      - run: echo "Hello I am from GitHub Action workflow!"
