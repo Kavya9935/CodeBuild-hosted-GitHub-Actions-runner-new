@@ -7,23 +7,40 @@ jobs:
     runs-on:
       - codebuild-Demo-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      # Configure AWS creds via OIDC (use your role and region)
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::654654319122:role/CodeBuild-Super-Role
-          aws-region: us-east-1
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      # Kick off a tiny CodeBuild "metadata" build that only exists to carry env overrides
-      - name: Start metadata build (for Lambda/EventBridge)
+      # Optional: write a “start” breadcrumb that lets us map run_id -> CodeBuild build id
+      # Only executes if the job actually begins on a runner
+      - name: Emit runner->CB binding
+        if: ${{ always() }}
         run: |
-          aws codebuild start-build --project-name Demo \
-            --environment-variables-override \
-              name=GITHUB_OWNER,value=${{ github.repository_owner }},type=PLAINTEXT \
-              name=GITHUB_REPO,value=${{ github.event.repository.name }},type=PLAINTEXT \
-              name=GITHUB_REPOSITORY,value=${{ github.repository }},type=PLAINTEXT \
-              name=GITHUB_RUN_ID,value=${{ github.run_id }},type=PLAINTEXT \
-              name=GITHUB_RUN_URL,value=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }},type=PLAINTEXT
+          echo "GITHUB_RUN_ID=$GITHUB_RUN_ID"
+          echo "GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT"
+          echo "GITHUB_REPOSITORY=$GITHUB_REPOSITORY"
+          echo "GITHUB_WORKFLOW=$GITHUB_WORKFLOW"
+          echo "CODEBUILD_BUILD_ID=${CODEBUILD_BUILD_ID:-unknown}"
+          echo "RUNNER_LABELS=${RUNNER_LABELS:-unknown}"
 
-      # Your original step(s)
-      - run: echo "Hello I am from GitHub Action workflow!"
+          # (Optional) Put a structured log line into a dedicated log group for correlation
+          TS=$(date +%s%3N)
+          MSG="{\"run_id\":\"$GITHUB_RUN_ID\",\"attempt\":\"$GITHUB_RUN_ATTEMPT\",\"repo\":\"$GITHUB_REPOSITORY\",\"workflow\":\"$GITHUB_WORKFLOW\",\"cb\":\"${CODEBUILD_BUILD_ID:-unknown}\",\"labels\":\"${RUNNER_LABELS:-unknown}\"}"
+          aws logs create-log-group --log-group-name "/gha-runner/bindings" 2>/dev/null || true
+          aws logs create-log-stream --log-group-name "/gha-runner/bindings" --log-stream-name "default" 2>/dev/null || true
+          TOKEN=$(aws logs describe-log-streams --log-group-name "/gha-runner/bindings" --log-stream-name-prefix "default" --query 'logStreams[0].uploadSequenceToken' --output text 2>/dev/null || true)
+          if [ "$TOKEN" = "None" ] || [ -z "$TOKEN" ]; then
+            aws logs put-log-events --log-group-name "/gha-runner/bindings" --log-stream-name "default" --log-events timestamp=$TS,message="$MSG" >/dev/null
+          else
+            aws logs put-log-events --log-group-name "/gha-runner/bindings" --log-stream-name "default" --sequence-token "$TOKEN" --log-events timestamp=$TS,message="$MSG" >/dev/null
+          fi
+
+    
+
+
+
+
+
+
+
+
+
