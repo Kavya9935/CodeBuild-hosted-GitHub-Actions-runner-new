@@ -24,33 +24,42 @@ jobs:
           env | grep -E "(AWS|CODEBUILD)" || echo "No AWS/CodeBuild vars found"
 
       - name: Emit runner->CB binding
-        if: ${{ always() }}
+        env:
+          LOG_GROUP: /gha-runner/bindings
+          AWS_REGION: us-east-1         # set to your region
+          AWS_DEFAULT_REGION: us-east-1 # belt-and-suspenders
         run: |
-          set -x
-          echo "=== GitHub Variables ==="
-          echo "GITHUB_RUN_ID=$GITHUB_RUN_ID"
-          echo "GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT"
-          echo "GITHUB_REPOSITORY=$GITHUB_REPOSITORY"
-          echo "GITHUB_WORKFLOW=$GITHUB_WORKFLOW"
-          echo "CODEBUILD_BUILD_ID=${CODEBUILD_BUILD_ID:-unknown}"
-          echo "RUNNER_LABELS=${RUNNER_LABELS:-unknown}"
-
-          echo "=== Testing CloudWatch Logs ==="
-          # Test log group creation
-          echo "Creating log group..."
-          aws logs create-log-group --log-group-name "/gha-runner/bindings" 2>&1 || echo "Log group creation failed: $?"
-          
-          # Test log stream creation
-          echo "Creating log stream..."
-          aws logs create-log-stream --log-group-name "/gha-runner/bindings" --log-stream-name "default" 2>&1 || echo "Stream creation failed: $?"
-          
-          # Test putting a simple log event
-          echo "Testing log event..."
+          set -euxo pipefail
+          aws --version
+          aws sts get-caller-identity   # proves credentials exist
+          aws configure list            # prints the region the CLI will use
+      
           TS=$(date +%s%3N)
-          MSG='{"test":"debug","run_id":"'$GITHUB_RUN_ID'"}'
-          aws logs put-log-events --log-group-name "/gha-runner/bindings" --log-stream-name "default" --log-events timestamp=$TS,message="$MSG" 2>&1 || echo "Log event failed: $?"
-          
-          echo "=== Debug completed ==="
+          MSG="{\"run_id\":\"$GITHUB_RUN_ID\",\"attempt\":\"$GITHUB_RUN_ATTEMPT\",\"repo\":\"$GITHUB_REPOSITORY\",\"workflow\":\"$GITHUB_WORKFLOW\",\"cb\":\"${CODEBUILD_BUILD_ID:-unknown}\",\"labels\":\"${RUNNER_LABELS:-unknown}\"}"
+      
+          # Create (idempotent)
+          aws logs create-log-group  --log-group-name "$LOG_GROUP" || true
+          aws logs create-log-stream --log-group-name "$LOG_GROUP" --log-stream-name "default" || true
+      
+          TOKEN=$(aws logs describe-log-streams \
+            --log-group-name "$LOG_GROUP" \
+            --log-stream-name-prefix "default" \
+            --query 'logStreams[0].uploadSequenceToken' \
+            --output text || true)
+      
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "None" ]; then
+            aws logs put-log-events \
+              --log-group-name "$LOG_GROUP" \
+              --log-stream-name "default" \
+              --log-events timestamp=$TS,message="$MSG"
+          else
+            aws logs put-log-events \
+              --log-group-name "$LOG_GROUP" \
+              --log-stream-name "default" \
+              --sequence-token "$TOKEN" \
+              --log-events timestamp=$TS,message="$MSG"
+          fi
+
 
 
 
