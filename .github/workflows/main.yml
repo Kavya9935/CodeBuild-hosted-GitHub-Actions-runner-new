@@ -3,18 +3,31 @@ on: [push]
 
 jobs:
   Hello-World-Job:
-    # your CodeBuild-hosted runner label
     runs-on:
       - codebuild-Demo-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Optional: write a “start” breadcrumb that lets us map run_id -> CodeBuild build id
-      # Only executes if the job actually begins on a runner
+      - name: Debug AWS Environment
+        if: ${{ always() }}
+        run: |
+          set -x
+          echo "=== AWS Environment Debug ==="
+          echo "Testing AWS CLI access..."
+          aws sts get-caller-identity || echo "AWS CLI failed: $?"
+          
+          echo "Current AWS region:"
+          aws configure get region || echo "No default region set"
+          
+          echo "Environment variables:"
+          env | grep -E "(AWS|CODEBUILD)" || echo "No AWS/CodeBuild vars found"
+
       - name: Emit runner->CB binding
         if: ${{ always() }}
         run: |
+          set -x
+          echo "=== GitHub Variables ==="
           echo "GITHUB_RUN_ID=$GITHUB_RUN_ID"
           echo "GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT"
           echo "GITHUB_REPOSITORY=$GITHUB_REPOSITORY"
@@ -22,23 +35,22 @@ jobs:
           echo "CODEBUILD_BUILD_ID=${CODEBUILD_BUILD_ID:-unknown}"
           echo "RUNNER_LABELS=${RUNNER_LABELS:-unknown}"
 
-          # (Optional) Put a structured log line into a dedicated log group for correlation
+          echo "=== Testing CloudWatch Logs ==="
+          # Test log group creation
+          echo "Creating log group..."
+          aws logs create-log-group --log-group-name "/gha-runner/bindings" 2>&1 || echo "Log group creation failed: $?"
+          
+          # Test log stream creation
+          echo "Creating log stream..."
+          aws logs create-log-stream --log-group-name "/gha-runner/bindings" --log-stream-name "default" 2>&1 || echo "Stream creation failed: $?"
+          
+          # Test putting a simple log event
+          echo "Testing log event..."
           TS=$(date +%s%3N)
-          MSG="{\"run_id\":\"$GITHUB_RUN_ID\",\"attempt\":\"$GITHUB_RUN_ATTEMPT\",\"repo\":\"$GITHUB_REPOSITORY\",\"workflow\":\"$GITHUB_WORKFLOW\",\"cb\":\"${CODEBUILD_BUILD_ID:-unknown}\",\"labels\":\"${RUNNER_LABELS:-unknown}\"}"
-          aws logs create-log-group --log-group-name "/gha-runner/bindings" 2>/dev/null || true
-          aws logs create-log-stream --log-group-name "/gha-runner/bindings" --log-stream-name "default" 2>/dev/null || true
-          TOKEN=$(aws logs describe-log-streams --log-group-name "/gha-runner/bindings" --log-stream-name-prefix "default" --query 'logStreams[0].uploadSequenceToken' --output text 2>/dev/null || true)
-          if [ "$TOKEN" = "None" ] || [ -z "$TOKEN" ]; then
-            aws logs put-log-events --log-group-name "/gha-runner/bindings" --log-stream-name "default" --log-events timestamp=$TS,message="$MSG" >/dev/null
-          else
-            aws logs put-log-events --log-group-name "/gha-runner/bindings" --log-stream-name "default" --sequence-token "$TOKEN" --log-events timestamp=$TS,message="$MSG" >/dev/null
-          fi
-
-    
-
-
-
-
+          MSG='{"test":"debug","run_id":"'$GITHUB_RUN_ID'"}'
+          aws logs put-log-events --log-group-name "/gha-runner/bindings" --log-stream-name "default" --log-events timestamp=$TS,message="$MSG" 2>&1 || echo "Log event failed: $?"
+          
+          echo "=== Debug completed ==="
 
 
 
