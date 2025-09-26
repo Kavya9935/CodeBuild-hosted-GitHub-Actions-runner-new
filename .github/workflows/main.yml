@@ -7,8 +7,6 @@ jobs:
     runs-on:
       - codebuild-Demo-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-
-
      
 
       # Your original step(s)
