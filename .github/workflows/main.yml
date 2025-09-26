@@ -3,73 +3,13 @@ on: [push]
 
 jobs:
   Hello-World-Job:
+    # your CodeBuild-hosted runner label
     runs-on:
       - codebuild-Demo-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
 
-      - name: Debug AWS Environment
-        if: ${{ always() }}
-        run: |
-          set -x
-          echo "=== AWS Environment Debug ==="
-          echo "Testing AWS CLI access..."
-          aws sts get-caller-identity || echo "AWS CLI failed: $?"
-          
-          echo "Current AWS region:"
-          aws configure get region || echo "No default region set"
-          
-          echo "Environment variables:"
-          env | grep -E "(AWS|CODEBUILD)" || echo "No AWS/CodeBuild vars found"
 
-      - name: Emit runner->CB binding
-        env:
-          LOG_GROUP: /gha-runner/bindings
-          AWS_REGION: us-east-1         # your region
-          AWS_DEFAULT_REGION: us-east-1
-        run: |
-          set -euxo pipefail
-          # Prove creds/region
-          aws sts get-caller-identity >/dev/null
-          aws configure list
-          TS=$(date +%s%3N)
-          # Build the message as compact JSON
-          MSG_OBJ=$(jq -nc \
-            --arg run   "$GITHUB_RUN_ID" \
-            --arg att   "$GITHUB_RUN_ATTEMPT" \
-            --arg repo  "$GITHUB_REPOSITORY" \
-            --arg wf    "$GITHUB_WORKFLOW" \
-            --arg cb    "${CODEBUILD_BUILD_ID:-unknown}" \
-            --arg lbl   "${RUNNER_LABELS:-unknown}" \
-            '{run_id:$run,attempt:$att,repo:$repo,workflow:$wf,cb:$cb,labels:$lbl}')
-          # Quote it as a JSON string literal for CloudWatch
-          QUOTED_MSG=$(printf '%s' "$MSG_OBJ" | jq -Rs .)
-          aws logs create-log-group  --log-group-name "$LOG_GROUP" || true
-          aws logs create-log-stream --log-group-name "$LOG_GROUP" --log-stream-name "default" || true
-          TOKEN=$(aws logs describe-log-streams \
-            --log-group-name "$LOG_GROUP" \
-            --log-stream-name-prefix "default" \
-            --query 'logStreams[0].uploadSequenceToken' \
-            --output text || true)
-          # Use JSON input (requires --cli-binary-format)
-          EVENT_PAYLOAD="[ { \"timestamp\": $TS, \"message\": $QUOTED_MSG } ]"
-          if [ -z "$TOKEN" ] || [ "$TOKEN" = "None" ]; then
-            aws logs put-log-events \
-              --cli-binary-format raw-in-base64-out \
-              --log-group-name "$LOG_GROUP" \
-              --log-stream-name "default" \
-              --log-events "$EVENT_PAYLOAD"
-          else
-            aws logs put-log-events \
-              --cli-binary-format raw-in-base64-out \
-              --log-group-name "$LOG_GROUP" \
-              --log-stream-name "default" \
-              --sequence-token "$TOKEN" \
-              --log-events "$EVENT_PAYLOAD"
-          fi
-      
-      
-      
-      
-      
+     
+
+      # Your original step(s)
+      - run: echo "Hello I am from GitHub Action workflow!"
