@@ -1,13 +1,47 @@
-name: Hello World
-on: [push]
+name: Build via Self-hosted Runner (CB correlation)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
 
 jobs:
-  Hello-World-Job:
-    # your CodeBuild-hosted runner label
-    runs-on:
-      - codebuild-Demo-${{ github.run_id }}-${{ github.run_attempt }}
+  build:
+    runs-on: codebuild-Demo-${{ github.run_id }}-${{ github.run_attempt }}
+    env:
+      AWS_REGION: us-east-1               # match your Lambda region
+      LAMBDA_NAME: gha-correlation        # your function name
     steps:
-      - uses: actions/checkout@v4
+      - name: Correlate this run to CodeBuild ID 
+        run: |
+          PAYLOAD=$(jq -n \
+            --arg cbid "$CODEBUILD_BUILD_ID" \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg job "$GITHUB_JOB" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg url "https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+          '{codebuild_build_id:$cbid, repo:$repo, job:$job, run_id:$run_id, run_url:$url}')
 
-      # Your original step(s)
-      - run: echo "Hello I am from GitHub ghfhgfAction workflow!"
+          aws lambda invoke \
+            --function-name "$LAMBDA_NAME" \
+            --region "$AWS_REGION" \
+            --payload "$PAYLOAD" \
+            --cli-binary-format raw-in-base64-out \
+            /dev/null
+      
+      - uses: actions/checkout@v4
+      - name: Your actual build
+        run: |
+          echo "Build goes here"
+
+
+
+
+
+
+
+
+
+
+
+
