@@ -1,47 +1,462 @@
-name: Build via Self-hosted Runner (CB correlation)
+name: Setup do ambiente
 
-on:
-  workflow_dispatch:
-  push:
-    branches: [ main ]
+on:  # yamllint disable-line rule:truthy
+  workflow_call:
+    inputs:
+      all_API_projects:
+        type: string
+      all_WEB_projects:
+        type: string
+      build_ami:
+        type: string
+      infra_test_apply:
+        type: string
+      infra_homolog_apply:
+        type: string
+      infra_prd_apply:
+        type: string
+
+    outputs:
+      KOB_ENV:
+        value: ${{ jobs.setup.outputs.KOB_ENV }}
+      AWS_REGION:
+        value: ${{ jobs.setup.outputs.AWS_REGION }}
+      DOTNET_CONFIG:
+        value: ${{ jobs.setup.outputs.DOTNET_CONFIG }}
+      RUN_PACKER:
+        value: ${{ jobs.setup.outputs.RUN_PACKER }}
+      RUN_TF_PRD:
+        value: ${{ jobs.setup.outputs.RUN_TF_PRD }}
+      RUN_TF_HOMOLOG:
+        value: ${{ jobs.setup.outputs.RUN_TF_HOMOLOG }}
+      RUN_TF_TEST:
+        value: ${{ jobs.setup.outputs.RUN_TF_TEST }}
+      KOBOLITO_LIST:
+        value: ${{ jobs.setup.outputs.KOBOLITO_LIST }}
+      STANDALONE_LIST:
+        value: ${{ jobs.setup.outputs.STANDALONE_LIST }}
+      CREATE_MIGRATION:
+        value: ${{ jobs.setup.outputs.CREATE_MIGRATION }}
+      APPLY_MIGRATION:
+        value: ${{ jobs.setup.outputs.APPLY_MIGRATION }}
 
 jobs:
-  build:
-    runs-on: codebuild-Demo-${{ github.run_id }}-${{ github.run_attempt }}
-    env:
-      AWS_REGION: us-east-1               # match your Lambda region
-      LAMBDA_NAME: gha-correlation        # your function name
+  setup:
+    name: Define variaveis de ambiente do CI
+    runs-on: ubuntu-latest
+    outputs:
+      KOB_ENV: ${{ steps.define-env.outputs.KOB_ENV }}
+      AWS_REGION: ${{ steps.define-aws-region.outputs.AWS_REGION }}
+      DOTNET_CONFIG: ${{ steps.define-dotnet-config.outputs.CONFIG }}
+      RUN_PACKER: ${{ steps.define-run-packer.outputs.RUN_PACKER }}
+      RUN_TF_PRD: ${{ steps.define-run-tf.outputs.RUN_TF_PRD }}
+      RUN_TF_TEST: ${{ steps.define-run-tf.outputs.RUN_TF_TEST }}
+      RUN_TF_HOMOLOG: ${{ steps.define-run-tf.outputs.RUN_TF_HOMOLOG }}
+      CREATE_MIGRATION: ${{ steps.define-create-migration.outputs.CREATE_MIGRATION }}
+      KOBOLITO_LIST: ${{ steps.define-projetos-kobolito.outputs.KOBOLITO_LIST }}
+      STANDALONE_LIST: ${{ steps.define-projetos-standalone.outputs.STANDALONE_LIST }}
+      APPLY_MIGRATION: ${{ steps.define-apply-migration.outputs.APPLY_MIGRATION }}
+
     steps:
-      - name: Correlate this run to CodeBuild ID 
-        run: |
-          PAYLOAD=$(jq -n \
-            --arg cbid "$CODEBUILD_BUILD_ID" \
-            --arg repo "$GITHUB_REPOSITORY" \
-            --arg job "$GITHUB_JOB" \
-            --arg run_id "$GITHUB_RUN_ID" \
-            --arg url "https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-          '{codebuild_build_id:$cbid, repo:$repo, job:$job, run_id:$run_id, run_url:$url}')
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-          aws lambda invoke \
-            --function-name "$LAMBDA_NAME" \
-            --region "$AWS_REGION" \
-            --payload "$PAYLOAD" \
-            --cli-binary-format raw-in-base64-out \
-            /dev/null
-      
-      - uses: actions/checkout@v4
-      - name: Your actual build
-        run: |
-          echo "Build goes here"
+    - name: Define ambiente
+      id: define-env
+      run: |
+        case "${GITHUB_REF#refs/heads/}" in
+            production) KOB_ENV="production" ;;
+            homolog) KOB_ENV="homolog" ;;
+            infra-homolog) KOB_ENV="homolog" ;;
+            infra-teste) KOB_ENV="teste" ;;
+            teste) KOB_ENV="teste" ;;
+            *) KOB_ENV="dev" ;;
+        esac
+        echo "KOB_ENV: ${KOB_ENV}"
+        echo "KOB_ENV=${KOB_ENV}" >> "${GITHUB_OUTPUT}"
 
+    - name: Define AWS Region
+      id: define-aws-region
+      run: |
+        case "${{ steps.define-env.outputs.KOB_ENV }}" in
+            production) AWS_REGION="us-east-1" ;;
+            teste) AWS_REGION="us-east-1" ;;
+            *) AWS_REGION="us-east-1" ;;
+        esac
+        echo "AWS_REGION: ${AWS_REGION}"
+        echo "AWS_REGION=${AWS_REGION}" >> "${GITHUB_OUTPUT}"
 
+    - name: Define dotnet config a ser usada
+      id: define-dotnet-config
+      run: |
+        CONFIG="Debug"
+        if [[ "${GITHUB_REF#refs/heads/}" == "production" ]]; then
+          CONFIG="Release"
+        fi
+        echo "CONFIG=${CONFIG}" >> "${GITHUB_OUTPUT}"
 
+    - uses: dorny/paths-filter@v3
+      if: ${{ github.event_name != 'workflow_dispatch' }}
+      id: filter
+      with:
+        base: ${{ github.ref }}
+        filters: |
+          packer:
+            - 'packer/**'
+            - '.github/workflows/packer-build.yaml'
+          tf_test:
+            - 'terraform/teste/**'
+            - 'terraform/files/*'
+          tf_homolog:
+            - 'terraform/homolog/**'
+            - 'terraform/files/*'
+          tf_prd:
+            - 'terraform/*.tf'
+            - 'terraform/*.tfvars'
+            - 'terraform/files/*'
+            - 'terraform/parameters_file/*'
+            - 'terraform/template/*'
 
+    - name: Define Run Packer
+      id: define-run-packer
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        BUILD_AMI: ${{ inputs.build_ami }}
+        FILTER_AMI: ${{ steps.filter.outputs.packer || 'false' }}
+      run: |
+        RUN_PACKER="no"
+        if [[ "$EVENT_NAME" == "workflow_dispatch" && "$BUILD_AMI" == "yes" ]]; then
+          RUN_PACKER="yes"
+        elif [[ "$EVENT_NAME" != "workflow_dispatch" && "$FILTER_AMI" == "true" ]]; then
+          RUN_PACKER="yes"
+        fi
+        echo "Inputs: EVENT_NAME=$EVENT_NAME, BUILD_AMI=$BUILD_AMI, FILTER_AMI=$FILTER_AMI"
+        echo "RUN_PACKER=$RUN_PACKER"
+        echo "RUN_PACKER=${RUN_PACKER}" >> "${GITHUB_OUTPUT}"
 
+    - name: Define Run TF
+      id: define-run-tf
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        INFRA_PRD_APPLY: ${{ inputs.infra_prd_apply }}
+        INFRA_TEST_APPLY: ${{ inputs.infra_test_apply }}
+        INFRA_HOMOLOG_APPLY: ${{ inputs.infra_homolog_apply }}
+        FILTER_TF_PRD: ${{ steps.filter.outputs.tf_prd || 'false' }}
+        FILTER_TF_TEST: ${{ steps.filter.outputs.tf_test || 'false' }}
+        FILTER_TF_HOMOLOG: ${{ steps.filter.outputs.tf_homolog || 'false' }}
+      run: |
+        RUN_TF_PRD="no"
+        RUN_TF_TEST="no"
+        RUN_TF_HOMOLOG="no"
 
+        if [[ "$EVENT_NAME" == "workflow_dispatch" && "$INFRA_PRD_APPLY" == "yes" ]]; then
+          RUN_TF_PRD="yes"
+        elif [[ "$EVENT_NAME" != "workflow_dispatch" && "$FILTER_TF_PRD" == "true" ]]; then
+          RUN_TF_PRD="yes"
+        fi
 
+        if [[ "$EVENT_NAME" == "workflow_dispatch" && "$INFRA_HOMOLOG_APPLY" == "yes" ]]; then
+          RUN_TF_HOMOLOG="yes"
+        elif [[ "$EVENT_NAME" != "workflow_dispatch" && "$FILTER_TF_HOMOLOG" == "true" ]]; then
+          RUN_TF_HOMOLOG="yes"
+        fi
 
+        if [[ "$EVENT_NAME" == "workflow_dispatch" && "$INFRA_TEST_APPLY" == "yes" ]]; then
+          RUN_TF_TEST="yes"
+        elif [[ "$EVENT_NAME" != "workflow_dispatch" && "$FILTER_TF_TEST" == "true" ]]; then
+          RUN_TF_TEST="yes"
+        fi
 
+        echo "Inputs: EVENT_NAME=$EVENT_NAME, INFRA_PRD_APPLY=$INFRA_PRD_APPLY, FILTER_TF_PRD=$FILTER_TF_PRD, INFRA_TEST_APPLY=$INFRA_TEST_APPLY, FILTER_TF_TEST=$FILTER_TF_TEST, INFRA_HOMOLOG_APPLY=$INFRA_HOMOLOG_APPLY, FILTER_TF_HOMOLOG=$FILTER_TF_HOMOLOG"
+        echo "RUN_TF_PRD=${RUN_TF_PRD}"
+        echo "RUN_TF_TEST=${RUN_TF_TEST}"
+        echo "RUN_TF_HOMOLOG=${RUN_TF_HOMOLOG}"
 
+        echo "RUN_TF_PRD=${RUN_TF_PRD}" >> "${GITHUB_OUTPUT}"
+        echo "RUN_TF_TEST=${RUN_TF_TEST}" >> "${GITHUB_OUTPUT}"
+        echo "RUN_TF_HOMOLOG=${RUN_TF_HOMOLOG}" >> "${GITHUB_OUTPUT}"
 
+    - name: Define commit base
+      id: base-commit
+      run: |
+        if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+          echo "BASE_SHA=$(git merge-base origin/${GITHUB_BASE_REF} ${GITHUB_SHA})" >> "${GITHUB_OUTPUT}"
+        else
+          echo "BASE_SHA=$(git merge-base origin/${GITHUB_REF#refs/heads/} ${GITHUB_SHA})" >> "${GITHUB_OUTPUT}"
+        fi
 
+    - name: Lista arquivos modificados
+      id: changed-files
+      uses: tj-actions/changed-files@v45
+      with:
+        base_sha: ${{ steps.base-commit.outputs.BASE_SHA }}
+
+    - id: define-create-migration
+      name: Define se existem migrations para criar
+      run: |
+        CREATE_MIGRATION="no"
+
+        if [[ "${GITHUB_EVENT_NAME}" != "pull_request" ]]; then
+          echo "CREATE_MIGRATION=${CREATE_MIGRATION}" >> "${GITHUB_OUTPUT}"
+          echo "CREATE_MIGRATION: ${CREATE_MIGRATION}"
+          exit 0
+        fi
+
+        FILTER_CHANGED_PROJECTS=($(echo "${{ steps.changed-files.outputs.all_changed_files }}" \
+          | tr ' ' '\n' \
+          | xargs -n1 dirname \
+          | grep -E '.Infrastructure/ORM/Mapping|.Infrastructure/Persistence' \
+          | sed -e 's@^src/Kob/@@' \
+          | sed 's/\.Visa/\.VISA/g' \
+          | sort \
+          | uniq
+        ))
+        echo FILTER_CHANGED_PROJECTS: "${FILTER_CHANGED_PROJECTS[@]}"
+
+        if [ ${#FILTER_CHANGED_PROJECTS[@]} -ne 0 ]; then
+          CREATE_MIGRATION="yes"
+        fi
+
+        echo "CREATE_MIGRATION=${CREATE_MIGRATION}" >> "${GITHUB_OUTPUT}"
+        echo "CREATE_MIGRATION: ${CREATE_MIGRATION}"
+
+    - id: define-projetos-kobolito
+      name: Define projetos do kobolito para build
+      env:
+        ALL_API_PROJECTS: ${{ inputs.all_API_projects }}
+        CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
+      run: |
+        if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${ALL_API_PROJECTS}" == "no" ]]; then
+          echo "KOBOLITO_LIST=[]" >> "${GITHUB_OUTPUT}"
+          echo "KOBOLITO_LIST=[]"
+          exit 0
+        fi
+
+        KOBOLITO_RELEVANT_PROJECTS=($(find ./src/Kob -type f -name '*.csproj' \
+          | sort \
+          | xargs grep -l '<Project Sdk="Microsoft.NET.Sdk.Web">' \
+          | xargs -n1 dirname \
+          | sed -e 's@^\./@@' -e 's@^src/Kob/@@g'
+        ))
+        echo KOBOLITO_RELEVANT_PROJECTS: "${KOBOLITO_RELEVANT_PROJECTS[@]}"
+
+        #Lista de prefixos de projetos que, se modificados, fazem o build todos os artefatos
+        BUILD_ALL_PROJECTS=(
+          "Kob.Adquirencia"
+          "Kob.Auth"
+          "Kob.CAP"
+          "Kob.CAR"
+          "Kob.Credito"
+          "Kob.Cadastro"
+          "Kob.Core"
+          "Kob.Emissao"
+          "Kob.Emissor"
+          "Kob.EsquemaPagamento"
+          "Kob.Infrastructure"
+          "Kob.Originador"
+          "Kob.SistemaCartaoCredito"
+          "Kobold"
+        )
+
+        FILTER_CHANGED_PROJECTS=($(echo "${CHANGED_FILES}" \
+          | tr ' ' '\n' \
+          | xargs -n1 dirname \
+          | grep 'src/Kob/' \
+          | sed -e 's@^src/Kob/@@' \
+          | sed 's/\.Visa/\.VISA/g' \
+          | sort \
+          | uniq
+        ))
+        echo FILTER_CHANGED_PROJECTS: "${FILTER_CHANGED_PROJECTS[@]}"
+
+        MATCH_FOUND=false
+
+        for project in "${FILTER_CHANGED_PROJECTS[@]}"; do
+          for build_project in "${BUILD_ALL_PROJECTS[@]}"; do
+            if [[ "$project" == "$build_project"* ]]; then
+              MATCH_FOUND=true
+              break
+            fi
+          done
+          if [ "$MATCH_FOUND" == true ]; then
+            break
+          fi
+        done
+
+        if [[ "${ALL_API_PROJECTS}" == "yes" ]] || [[ "$MATCH_FOUND" == true ]]; then
+          KOBOLITO_LIST="$(echo ${KOBOLITO_RELEVANT_PROJECTS[@]} \
+            | tr '\n' ' ' \
+            | sed 's/\s\+$//g' \
+            | jq -R -s -c 'split(" ")')"
+          echo "KOBOLITO_LIST=${KOBOLITO_LIST}" >> "${GITHUB_OUTPUT}"
+          echo "KOBOLITO_LIST=${KOBOLITO_LIST}"
+          exit 0
+        fi
+
+        # Separada a busca de projetos modificados em 2 momentos para poder contemplar a listagem de projetos relevantes com 2 e 3 palavras.
+        # GET ONLY CHANGED PROJECTS BFF, API OR VISA.
+        CHANGED_PROJECTS_1=($(echo "${FILTER_CHANGED_PROJECTS[@]}" \
+          | tr ' ' '\n' \
+          | grep -E '\.VISA|\.API|\.BFF' \
+          | sed -e 's@^\([a-zA-Z0-9_-]*\)\.\([a-zA-Z0-9_-]*\)\.\([a-zA-Z0-9_-]*\).*@\1.\2.\3@' \
+          | sort \
+          | uniq
+        ))
+        echo CHANGED_PROJECTS_1: "${CHANGED_PROJECTS_1[@]}"
+
+        # GET ONLY CHANGED PROJECTS.
+        CHANGED_PROJECTS_2=($(echo "${FILTER_CHANGED_PROJECTS[@]}" \
+          | tr ' ' '\n' \
+          | grep -v -E '\.VISA|\.API|\.BFF' \
+          | sed -e 's@^\([a-zA-Z0-9_-]*\)\.\([a-zA-Z0-9_-]*\).*@\1.\2@' \
+          | sort \
+          | uniq
+        ))
+        echo CHANGED_PROJECTS_2: "${CHANGED_PROJECTS_2[@]}"
+
+        CHANGED_PROJECTS=("${CHANGED_PROJECTS_1[@]}" "${CHANGED_PROJECTS_2[@]}")
+        echo --------
+        echo CHANGED_PROJECTS: "${CHANGED_PROJECTS[@]}"
+
+        KOBOLITO_LIST="$(
+          comm -12 \
+          <(echo ${KOBOLITO_RELEVANT_PROJECTS[@]} | tr ' ' '\n' | sort) \
+          <(echo ${CHANGED_PROJECTS[@]} | tr ' ' '\n' | sort) \
+          | tr '\n' ' ' \
+          | sed 's/\s\+$//g' \
+          | jq -R -s -c 'split(" ")'
+        )"
+
+        if [ -z "${KOBOLITO_LIST}" ] || [ "${KOBOLITO_LIST}" == "[]" ]; then
+          echo "KOBOLITO_LIST=[]" >> ${GITHUB_OUTPUT}
+          echo "KOBOLITO_LIST=[]"
+        else
+          echo "KOBOLITO_LIST=${KOBOLITO_LIST}" >> ${GITHUB_OUTPUT}
+          echo "KOBOLITO_LIST=${KOBOLITO_LIST}"
+        fi
+
+    - id: define-projetos-standalone
+      name: Define projetos do standalone para build
+      env:
+        ALL_API_PROJECTS: ${{ inputs.all_API_projects }}
+        ALL_WEB_PROJECTS: ${{ inputs.all_WEB_projects}}
+        CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
+      run: |
+        if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${ALL_API_PROJECTS}" == "no" && "${ALL_WEB_PROJECTS}" == "no" ]]; then
+          echo "STANDALONE_LIST=[]" >> "${GITHUB_OUTPUT}"
+          echo "STANDALONE_LIST=[]"
+          exit 0
+        fi
+
+        API_RELEVANT_PROJECTS=($(find ./src -type f -name '*.csproj' \
+            | sort \
+            | xargs grep -l '<Project Sdk="Microsoft.NET.Sdk.Web">' \
+            | xargs -n1 dirname \
+            | grep -v -E 'src/Kob/|.Web' \
+            | xargs -n1 basename \
+            | sed -e 's@^\./@@' -e 's@^src/@@g'
+          ))
+        echo API_RELEVANT_PROJECTS: "${API_RELEVANT_PROJECTS[@]}"
+
+        WEB_RELEVANT_PROJECTS=($(find ./src -type f -name '*.csproj' \
+            | sort \
+            | xargs grep -l '<Project Sdk="Microsoft.NET.Sdk.Web">' \
+            | xargs -n1 dirname \
+            | grep -E '.Web' \
+            | sed -e 's@^\./@@' -e 's@^src/@@g'
+          ))
+        echo WEB_RELEVANT_PROJECTS: "${WEB_RELEVANT_PROJECTS[@]}"
+
+        STANDALONE_PROJECTS=("${API_RELEVANT_PROJECTS[@]}" "${WEB_RELEVANT_PROJECTS[@]}")
+
+        if [[ "${ALL_API_PROJECTS}" == "yes" ]] && [[ "${ALL_WEB_PROJECTS}" == "yes" ]]; then
+          STANDALONE_LIST="$(echo ${STANDALONE_PROJECTS[@]} \
+            | tr '\n' ' ' \
+            | sed 's/\s\+$//g' \
+            | jq -R -s -c 'split(" ")')"
+          echo "STANDALONE_LIST=${STANDALONE_LIST}" >> "${GITHUB_OUTPUT}"
+          echo "STANDALONE_LIST=${STANDALONE_LIST}"
+          exit 0
+        fi
+
+        if [[ "${ALL_WEB_PROJECTS}" == "yes" ]]; then
+          STANDALONE_LIST="$(echo "${WEB_RELEVANT_PROJECTS[@]}" \
+            | tr '\n' ' ' \
+            | sed 's/\s\+$//g' \
+            | jq -R -s -c 'split(" ")')"
+          echo "STANDALONE_LIST=${STANDALONE_LIST}" >> "${GITHUB_OUTPUT}"
+          echo "STANDALONE_LIST=${STANDALONE_LIST}"
+          exit 0
+        fi
+
+        if [[ "${ALL_API_PROJECTS}" == "yes" ]]; then
+          STANDALONE_LIST="$(echo "${API_RELEVANT_PROJECTS[@]}" \
+            | tr '\n' ' ' \
+            | sed 's/\s\+$//g' \
+            | jq -R -s -c 'split(" ")')"
+          echo "STANDALONE_LIST=${STANDALONE_LIST}" >> "${GITHUB_OUTPUT}"
+          echo "STANDALONE_LIST=${STANDALONE_LIST}"
+          exit 0
+        fi
+
+        CHANGED_PROJECTS=($(echo "${CHANGED_FILES}" \
+          | tr ' ' '\n' \
+          | xargs -n1 dirname \
+          | grep '^src/' \
+          | sed -e 's@^\./@@' -e 's@^src/@@g' -e 's@/.*@@g' \
+          | grep -v -x Kob \
+          | sort \
+          | uniq
+        ))
+
+        STANDALONE_LIST="$(
+          comm -12 \
+          <(echo ${STANDALONE_PROJECTS[@]} | tr ' ' '\n' | sort) \
+          <(echo ${CHANGED_PROJECTS[@]} | tr ' ' '\n' | sort) \
+          | tr '\n' ' ' \
+          | sed 's/\s\+$//g' \
+          | jq -R -s -c 'split(" ")'
+        )"
+
+        if [ -z "${STANDALONE_LIST}" ] || [ "${STANDALONE_LIST}" == "[]" ]; then
+          echo "STANDALONE_LIST=[]" >> ${GITHUB_OUTPUT}
+          echo "STANDALONE_LIST=[]"
+        else
+          echo "STANDALONE_LIST=${STANDALONE_LIST}" >> ${GITHUB_OUTPUT}
+          echo "STANDALONE_LIST=${STANDALONE_LIST}"
+        fi
+
+    - id: define-apply-migration
+      name: Define aplicação de migration
+      run: |
+        if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+          echo "APPLY_MIGRATION=[]" >> ${GITHUB_OUTPUT}
+          exit 0
+        fi
+
+        COMMIT_HASH=$(git rev-parse HEAD)
+        echo "commit atual: $COMMIT_HASH"
+
+        COMMIT=$(git rev-parse HEAD^)
+        echo "commit anterior: $COMMIT"
+
+        FILES=$(git diff --name-only --diff-filter=AM HEAD^ HEAD)
+        echo "-------------------------------"
+        echo "Arquivos adicionados ou modificados no commit:"
+        echo "$FILES"
+        echo "-------------------------------"
+
+        if ! echo "$FILES" | grep -q -E '\.sql$'; then
+          echo "APPLY_MIGRATION=[]" >> ${GITHUB_OUTPUT}
+          exit 0
+        else
+          SQL_FILES=$(
+            echo "$FILES" | grep -E '\.sql$' \
+            | tr '\n' ' ' \
+            | sed 's/\s\+$//g' \
+            | jq -R -s -c 'split(" ")'
+          )
+          echo "APPLY_MIGRATION=${SQL_FILES}" >> ${GITHUB_OUTPUT}
+          echo "APPLY_MIGRATION=${SQL_FILES}"
+        fi
