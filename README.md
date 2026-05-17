@@ -1,1 +1,1 @@
-Q dev
+Q Developer
